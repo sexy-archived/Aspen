@@ -8221,9 +8221,9 @@ local G = {
     Arms = {on = false, col = Color3.new(1, 1, 1), width = 0.006},
     Items = {on = false, col = Color3.new(1, 1, 1), width = 0.006},
 }
-local C = {crease = 30, mode = "Static", speed = 1, col2 = Color3.fromRGB(255, 60, 120), accent = false, mat = "Chrome (Mirror)", trans = 0,
+local C = {crease = 30, mode = "Static", speed = 1, col2 = Color3.fromRGB(255, 60, 120), accent = false, mat = "Neon", trans = 0,
     style = "Web Mesh", shine = 1, wglow = false, wBr = 4,
-    glow = false, outCol = nil, outBr = 3, pulse = false, light = false, lightBr = 2, lightRange = 8, outFor = "Both", ver = 0}
+    glow = false, outCol = nil, outBr = 3, pulse = false, light = false, lightBr = 2, lightRange = 8, outFor = "Both", ver = 0, quality = "Performance", detail = 70}
 
 wf.Section("Arms Wireframe")
 local tgArms, tgItem, tgOut
@@ -8236,6 +8236,8 @@ wf.ColorWheel("Item Colour", "#FFFFFF", function(h) G.Items.col = hx(h) end)
 wf.Slider("Item Width", 0.001, 0.05, 0.006, function(v) G.Items.width = v; C.ver = C.ver + 1 end, 0.0005)
 wf.Section("Web Wireframe")
 wf.Dropdown("Wire Style", {"Web Mesh", "Fine Web"}, "Web Mesh", function(v) C.style = v; C.ver = C.ver + 1 end)
+wf.Dropdown("Wire Quality", {"Performance", "Balanced", "Quality"}, "Performance", function(v) C.quality = v; C.ver = C.ver + 1 end)
+wf.Slider("Wire Detail %", 20, 100, 70, function(v) C.detail = math.floor(v); C.ver = C.ver + 1 end, 5)
 wf.Slider("Crease Angle", 5, 90, 18, function(v) C.crease = math.floor(v); C.ver = C.ver + 1 end, 1)
 wf.Section("Colour Mode")
 wf.Dropdown("Colour Mode", {"Static", "Rainbow", "Pulse", "Gradient"}, "Static", function(v) C.mode = v end)
@@ -8243,7 +8245,7 @@ wf.Slider("Colour Speed", 0.1, 5, 1, function(v) C.speed = v end, 0.1)
 wf.ColorWheel("Gradient Colour", "#FF3C78", function(h) C.col2 = hx(h) end)
 wf.Toggle("Use Hub Accent Colour", false, function(v) C.accent = v == true end)
 wf.Section("Shine")
-wf.Dropdown("Wire Material", {"Chrome (Mirror)", "Neon", "Metal", "ForceField", "Glass", "Default"}, "Chrome (Mirror)", function(v) C.mat = v end)
+wf.Dropdown("Wire Material", {"Neon", "Default", "Metal", "Chrome (Mirror)", "ForceField", "Glass"}, "Neon", function(v) C.mat = v end)
 wf.Slider("Shine (Reflectance)", 0, 1, 1, function(v) C.shine = v end, 0.05)
 wf.Slider("Wire Transparency", 0, 0.9, 0, function(v) C.trans = v end, 0.05)
 wf.Section("Wire Glow")
@@ -8276,9 +8278,15 @@ local function withId(fn)
 end
 local STYLES = {["Web Mesh"] = {taper = 1, ridge = 0}, ["Fine Web"] = {taper = 1, ridge = 0}}
 local cache, waiters = {}, {}
+-- Performance = light tubes only (no joint spheres), Quality = the old heavy geometry
+local QUAL = {
+    Performance = {cap = 200, sides = 4, steps = 1, nodes = false, maxNodes = 0,    nodeRings = 2, nodeSides = 4},
+    Balanced    = {cap = 320, sides = 5, steps = 2, nodes = true,  maxNodes = 200,  nodeRings = 2, nodeSides = 6},
+    Quality     = {cap = 420, sides = 6, steps = 3, nodes = true,  maxNodes = 2400, nodeRings = 4, nodeSides = 8},
+}
 local function pk(v) return ("%.3f,%.3f,%.3f"):format(v.X, v.Y, v.Z) end
 local function nOf(e) return e.Opposite == nil and -1 or e.Normal:Dot(e.Opposite) end
-local function buildWire(meshId, width, crease, fallback, style)
+local function buildWire(meshId, width, crease, fallback, style, Q)
     local UGC = game:GetService("UGCValidationService")
     if cloneref then UGC = cloneref(UGC) end
     local okB, bin = pcall(UGC.GetMeshDataBinaryString, UGC, meshId)
@@ -8322,7 +8330,7 @@ local function buildWire(meshId, width, crease, fallback, style)
     local tp, rd = style.taper, style.ridge
     local trisPer = (rd > 0) and 8 or ((tp < 1) and 4 or 2)
     -- Curved strands use more triangles per edge, so keep a conservative budget.
-    local cap = math.min(420, math.floor(18000 / 36))
+    local cap = math.max(30, math.floor(Q.cap * (Q.detail or 1)))
     if #keep > cap then
         -- If the source mesh is very dense, preserve a spanning forest first.
         -- This keeps every connected mesh island joined even after the budget
@@ -8377,9 +8385,9 @@ local function buildWire(meshId, width, crease, fallback, style)
 
     -- Smooth rounded junctions replace the pointed low-poly caps.
     local nodeCount = 0
-    local NODE_RINGS, NODE_SIDES = 4, 8
+    local NODE_RINGS, NODE_SIDES = Q.nodeRings, Q.nodeSides
     for _, j in pairs(joints) do
-        if nodeCount >= 2400 then break end
+        if not Q.nodes or nodeCount >= Q.maxNodes then break end
         local radius = math.max(hw * (#j.dirs > 2 and 1.22 or 1.02), 0.00018)
         local top = em:AddVertex(j.p + Vector3.new(0, radius, 0))
         local bottom = em:AddVertex(j.p - Vector3.new(0, radius, 0))
@@ -8421,7 +8429,8 @@ local function buildWire(meshId, width, crease, fallback, style)
 
     -- Cubic centre-lines with three intermediate rings create soft fillets
     -- at the joins. The tube keeps a consistent six-sided profile.
-    local SIDES, CURVE_STEPS = 6, 3
+    local SIDES, CURVE_STEPS = Q.sides, Q.steps
+    local tubeN = 0
     local function bezier(p0, p1, p2, p3, t)
         local q = 1 - t
         return p0 * (q*q*q) + p1 * (3*q*q*t) +
@@ -8440,6 +8449,8 @@ local function buildWire(meshId, width, crease, fallback, style)
     for _, e in ipairs(keep) do
         local delta = e.PointB - e.PointA
         local length = delta.Magnitude
+        tubeN = tubeN + 1
+        if tubeN % 50 == 0 then task.wait() end
         if length > 1e-6 then
             local axis = delta / length
             local ja, jb = joints[pk(e.PointA)], joints[pk(e.PointB)]
@@ -8499,14 +8510,15 @@ local function buildWire(meshId, width, crease, fallback, style)
     return Content.fromObject(em)
 end
 local function getWire(meshId, width, crease, fallback, styleName, cb)
-    local key = meshId .. "|" .. string.format("%.5f", width) .. "|" .. crease .. "|" .. styleName
+    local Q = setmetatable({detail = (C.detail or 100) / 100}, {__index = QUAL[C.quality] or QUAL.Performance})
+    local key = meshId .. "|" .. string.format("%.5f", width) .. "|" .. crease .. "|" .. styleName .. "|" .. (C.quality or "") .. "|" .. (C.detail or 100)
     local c = cache[key]
     if c ~= nil then cb(c); return end
     if waiters[key] then table.insert(waiters[key], cb); return end
     waiters[key] = {cb}
     task.spawn(function()
         local res = fallback
-        withId(function() res = buildWire(meshId, width, crease, fallback, STYLES[styleName] or STYLES["Web Mesh"]) end)
+        withId(function() res = buildWire(meshId, width, crease, fallback, STYLES[styleName] or STYLES["Web Mesh"], Q) end)
         cache[key] = res
         local w = waiters[key]; waiters[key] = nil
         for _, f in ipairs(w or {}) do pcall(f, res) end
@@ -8551,11 +8563,13 @@ local function applyPart(part, grp, root)
     end)
 end
 -- if the game puts its own mesh back on a wired part (reload / equip / animation), put the wireframe back in the same frame
+local function getMC(p) return p.MeshContent end
+local function getObj(c) return c.Object end
 local function enforce(part, st)
     if st.busy or st.ver ~= C.ver or not st.wireObj or not part.Parent then return end
-    local okC, cur = pcall(function() return part.MeshContent end)
+    local okC, cur = pcall(getMC, part)
     if not okC then return end
-    local okO, obj = pcall(function() return cur.Object end)
+    local okO, obj = pcall(getObj, cur)
     if okO and obj == st.wireObj then return end
     local mid = part.MeshId
     if mid ~= "" and mid ~= st.meshId then
@@ -8657,12 +8671,12 @@ local function frame()
     local chrome = C.mat == "Chrome (Mirror)"
     local shiny = mat ~= nil and (chrome or C.mat == "Metal")
     local pulse = C.pulse and (0.5 + 0.5 * math.sin(now * 3)) or 0
-    withId(function()
+    do
         for part, st in pairs(wires) do
             if part.Parent and not st.busy and st.ver == C.ver then
                 local c = cols[st.grp]
                 if chrome then c = c:Lerp(Color3.new(1, 1, 1), 0.35) end
-                part.Color = c
+                if part.Color ~= c then part.Color = c end
                 -- material / transparency are only touched when you picked one, otherwise the game keeps control of them
                 if mat then
                     if part.Material ~= mat then part.Material = mat end
@@ -8678,7 +8692,7 @@ local function frame()
                 elseif st.fTr then part.Transparency = st.trans; st.fTr = false end
             end
         end
-    end)
+    end
     local seen = {}
     for part, st in pairs(wires) do
         local root = st.root
@@ -8697,7 +8711,7 @@ local function frame()
     end
 end
 -- ---- per-part glow: every part of the weapon / arms gets its own Highlight (outline mode), or every wired part gets one (wire glow) ----
-local MAXH = 12
+local MAXH = 6
 local outl = {}                  -- [part] = Highlight
 local outParts, outScanAt = {}, -10
 local function scanOutlineParts()
@@ -8777,14 +8791,14 @@ RunService:BindToRenderStep("AspenWireframe", Enum.RenderPriority.Last.Value + 4
     if next(wires) == nil and next(outl) == nil and not (G.Arms.on or G.Items.on or C.glow) then return end
     local nowT = os.clock()
     -- full viewmodel scan is the expensive part: only every 0.2s (or right after a setting changed); between scans just keep the wire mesh on
-    if nowT - lastScan > 0.2 or C.ver ~= lastVer then
+    if nowT - lastScan > 0.5 or C.ver ~= lastVer then
         lastScan, lastVer = nowT, C.ver
         pcall(scan)
     else
-        for part, st in pairs(wires) do if part.Parent then pcall(enforce, part, st) end end
+        for part, st in pairs(wires) do if st.wireObj and part.Parent and part.MeshId ~= "" then pcall(enforce, part, st) end end
     end
     -- colours / material / glow at ~25 fps instead of every frame
-    if nowT - lastFx > 0.04 then
+    if nowT - lastFx > ((C.mode == "Static" and not C.pulse and not C.glow and not C.wglow and not C.light) and 0.5 or 0.04) then
         lastFx = nowT
         pcall(frame)
         pcall(outlineFrame)
