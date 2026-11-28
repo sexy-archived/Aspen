@@ -830,8 +830,7 @@ SAVED[k] = nil
 end
 end
 end
--- Aspen UI revamp: start with clean defaults across every subtab.
-SAVED = {}
+-- (the old "start with clean defaults" wipe was removed: it threw away the saved config AND the autoload profile on every start)
 for _, n in ipairs({"Aspen", "AspenLoading", "AspenHUD", "AspenCursor", "Cypher", "CypherLoading", "CypherHUD"}) do
 local old = PG:FindFirstChild(n); if old then old:Destroy() end
 end
